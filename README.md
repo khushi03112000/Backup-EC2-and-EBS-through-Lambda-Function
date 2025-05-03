@@ -1,4 +1,4 @@
-## 📁 Project Title: **Automated EC2 AMI and EBS Volume Backup Using AWS Lambda (Event-Driven)**
+# 🛡️ Project: Automated EC2 AMI & EBS Snapshot Backups Using AWS Lambda
 
 ---
 
@@ -13,12 +13,15 @@ The process is triggered via an **Amazon CloudWatch Event Rule**, and executed t
 
 ---
 
-### 🎯 **Objective**
+## 🎯 Objective
 
-* Automatically create **AMI backups** for all EC2 instances.
-* Take **EBS snapshots**, but only if no recent snapshot exists.
-* Ensure backups only happen when instances are in a `running` state.
-* Handle AWS throttling and timing gracefully.
+To build a **serverless, automated backup system** that:
+
+* Creates **AMI backups** of all EC2 instances daily.
+* Creates **snapshots** of all EBS volumes.
+* Tags each backup with a consistent naming scheme and date.
+* Handles errors gracefully and avoids duplicate AMI names.
+* Requires **no manual intervention** after deployment.
 
 ---
 
@@ -44,78 +47,74 @@ The process is triggered via an **Amazon CloudWatch Event Rule**, and executed t
 
 ---
 
-### 🔁 **Workflow**
 
-1. **Trigger via CloudWatch**:
+## 🔁 Workflow
 
-   * A scheduled rule (e.g., every day at 2 AM) invokes the Lambda function.
+1. **EventBridge Trigger** fires Lambda on a schedule.
+2. **Lambda Function** fetches all EC2 instances and volumes.
+3. For each valid EC2 instance:
 
-2. **Instance Handling**:
+   * Confirm EBS-backed root volume.
+   * Create an AMI: `Backup-<instance-name>-<date>`.
+4. For each EBS volume:
 
-   * Lists all EC2 instances.
-   * Waits up to **3 minutes** for each instance to enter the `running` state.
-   * If not running within that time, the AMI backup for that instance is **skipped** to prevent failure.
-
-3. **AMI Backup**:
-
-   * Once running, a timestamped AMI is created for the instance using `NoReboot=True`.
-   * Instance name (from tags) is used in the AMI name for clarity.
-
-4. **EBS Snapshot Creation**:
-
-   * Lists all EBS volumes.
-   * Checks if a snapshot exists within the last **5 minutes**.
-   * If no recent snapshot exists, creates one and tags it accordingly.
-
-5. **API Throttling**:
-
-   * Uses `time.sleep(2)` between snapshot requests to avoid `SnapshotCreationPerVolumeRateExceeded` errors.
+   * Create a snapshot and tag with `Name` and date.
+5. **CloudWatch Logs** record all operations and errors.
 
 ---
 
-### 🖼️ **Where to Add AWS Console Screenshots**
+### 🖼️ AWS Console Screenshots
 
-| Section                    | Screenshot To Capture                                                   |
-| -------------------------- | ----------------------------------------------------------------------- |
-| IAM Role & Permissions     | Role attached to Lambda and inline policy with EC2/EBS actions          |
-| Lambda Function Setup      | Lambda console with Python code and increased timeout (e.g., 5 minutes) |
-| CloudWatch Event Rule      | Event rule configuration (schedule, targets)                            |
-| EC2 Console (Before/After) | Proof of AMI creation under “AMIs” tab                                  |
-| EBS Console (Before/After) | Proof of new snapshots under “Snapshots” tab                            |
-| CloudWatch Logs            | Logs showing backup activity, instance states, and snapshot status      |
+
+ #### IAM Role & Permissions    
+ <img width="1470" alt="Screenshot 2025-05-03 at 10 57 14 AM" src="https://github.com/user-attachments/assets/b3d55273-171e-4486-ba5c-51d799582239" />
+
+
+#### Lambda Function Setup      
+<img width="1470" alt="Screenshot 2025-05-03 at 11 00 56 AM" src="https://github.com/user-attachments/assets/62f5a658-57f7-475b-89e5-66e030cf8a6b" />
+<img width="1470" alt="Screenshot 2025-05-02 at 3 55 55 PM" src="https://github.com/user-attachments/assets/37ef290b-20ea-45a2-b61d-28124f2f11c8" />
+
+#### CloudWatch Event Rule     
+<img width="1470" alt="Screenshot 2025-05-03 at 11 03 19 AM" src="https://github.com/user-attachments/assets/8eb31e5f-f2d7-422a-a6ec-88077d222a7b" />
+
+#### EC2 Console (Before/After)   
+<img width="1470" alt="Screenshot 2025-05-02 at 3 48 37 PM" src="https://github.com/user-attachments/assets/08399b63-7a60-4722-ad27-63d7d3888faa" />
+<img width="1470" alt="Screenshot 2025-05-02 at 3 49 09 PM" src="https://github.com/user-attachments/assets/ddb9f726-7a00-4ac8-b52b-b7fb32d9c956" />
+
 
 ---
 
-### 🔐 **IAM Permissions for Lambda Role**
+## 🔐 IAM Role Permissions for Lambda
 
 ```json
 {
-  "Effect": "Allow",
-  "Action": [
-    "ec2:DescribeInstances",
-    "ec2:DescribeVolumes",
-    "ec2:DescribeSnapshots",
-    "ec2:CreateImage",
-    "ec2:CreateSnapshot",
-    "ec2:CreateTags"
-  ],
-  "Resource": "*"
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeVolumes",
+        "ec2:CreateImage",
+        "ec2:CreateSnapshot",
+        "ec2:CreateTags"
+      ],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
 ---
 
-### ⚠️ **Problems Faced During Development**
+## 🔧 Problems Faced During Development
 
-| ❌ Problem                                         | 🧩 Cause                                                                      | ✅ Solution                                                                                                |
-| ------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `return outside function`                         | Code block (EBS backup) was written outside `lambda_handler()`                | Moved all logic inside the function scope                                                                 |
-| `UnauthorizedOperation (CreateTags)`              | Lambda's IAM role lacked permission                                           | Added `ec2:CreateTags` to the IAM policy                                                                  |
-| `InvalidAMIName.Duplicate`                        | Duplicate AMI name for the same instance                                      | Appended date-time stamp to ensure uniqueness                                                             |
-| `SnapshotCreationPerVolumeRateExceeded`           | Created snapshots too quickly                                                 | Introduced a 2-second sleep between snapshot requests                                                     |
-| `Task timed out after 3.00 seconds`               | Lambda timeout was too short for all API operations                           | Increased timeout in Lambda settings to 5+ minutes                                                        |
-| `Instance state is stopped` or `not in 'running'` | Lambda tried to create AMI while instance was in `stopped` or `pending` state | Added retry loop to wait up to 3 minutes for `running` state before proceeding; if not, skip AMI creation |
-| No recent snapshot check failed                   | Missed `timezone` import for comparing snapshot times                         | Added `from datetime import timezone` to handle UTC timestamp logic correctly                             |
+| ❗ **Problem**                              | 📋 **Cause**                                             | 💡 **Solution**                                                                         |
+| ------------------------------------------ | -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `InvalidParameterValue` - No root volume   | Instance had no valid root or was instance-store backed  | Added validation for `RootDeviceType`, `RootDeviceName`, and `BlockDeviceMappings`      |
+| `InvalidAMIName.Duplicate` error           | AMI names must be globally unique within region          | Used `datetime` to append today’s date in the AMI name to ensure uniqueness             |
+| Function halted on single instance failure | Exceptions during image/snapshot creation were unhandled | Wrapped logic in `try-except` blocks to log and skip failures without stopping the flow |
+| Missing logs and visibility                | Skipped resources were not logged                        | Added `print()` logs visible in CloudWatch for all decisions and errors                 |
 
 ---
 
@@ -127,4 +126,6 @@ The process is triggered via an **Amazon CloudWatch Event Rule**, and executed t
 * Error handling and retry logic are essential for real-world reliability.
 
 ---
+
+
 
