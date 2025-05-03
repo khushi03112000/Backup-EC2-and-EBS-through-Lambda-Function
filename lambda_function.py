@@ -1,73 +1,75 @@
-import boto3
-import datetime
+import boto3                          # Import AWS SDK to interact with AWS services
+import datetime                      # Import for handling date and time
 
-ec2 = boto3.client('ec2')
+ec2 = boto3.client('ec2')           # Create a low-level EC2 client
 
-def lambda_handler(event, context):
-    today = datetime.datetime.utcnow()
-    date_str = today.strftime('%Y-%m-%d')
+def lambda_handler(event, context):                        # Lambda entry point
+    today = datetime.datetime.utcnow()                    # Get current UTC datetime
+    date_str = today.strftime('%Y-%m-%d')                 # Format date like '2025-05-01'
 
     ## -------- EC2 AMI BACKUPS -------- ##
-    instances = ec2.describe_instances()
+    instances = ec2.describe_instances()                  # Get all EC2 instances
 
-    for reservation in instances['Reservations']:
-        for instance in reservation['Instances']:
-            instance_id = instance['InstanceId']
-            state = instance['State']['Name']
-            root_device_name = instance.get('RootDeviceName')
-            block_devices = instance.get('BlockDeviceMappings', [])
-            root_device_type = instance.get('RootDeviceType')
+    for reservation in instances['Reservations']:         # Loop over each reservation (group of instances)
+        for instance in reservation['Instances']:         # Loop over each instance inside a reservation
 
-            # Log instance metadata
+            instance_id = instance['InstanceId']                              # Extract instance ID
+            state = instance['State']['Name']                                 # Get the state (running/stopped/etc.)
+            root_device_name = instance.get('RootDeviceName')                 # e.g., /dev/sda1 (boot volume path)
+            block_devices = instance.get('BlockDeviceMappings', [])           # All attached volumes
+            root_device_type = instance.get('RootDeviceType')                 # 'ebs' or 'instance-store'
+
+            # Logging for debug
             print(f"\nChecking instance {instance_id}")
             print(f"State: {state}")
             print(f"RootDeviceName: {root_device_name}")
             print(f"RootDeviceType: {root_device_type}")
             print(f"BlockDeviceMappings: {block_devices}")
 
-            # Skip if not running or stopped
-            if state not in ['running', 'stopped']:
-                print(f"Skipping {instance_id} - Instance not in a valid state.")
-                continue
+            # -- CHECK 1: VALID INSTANCE STATE --
+            if state not in ['running', 'stopped']:                         # Only backup if instance is active or stopped
+                print(f"Skipping {instance_id} - Invalid state.")
+                continue                                                    # Skip to next instance
 
-            # Skip if not EBS-backed
-            if root_device_type != 'ebs':
+            # -- CHECK 2: INSTANCE MUST BE EBS-BACKED --
+            if root_device_type != 'ebs':                                   # If instance is instance-store, skip
                 print(f"Skipping {instance_id} - Not EBS-backed.")
                 continue
 
-            # Skip if no valid root volume attached
-            root_device_attached = any(
-                bdm.get('DeviceName') == root_device_name for bdm in block_devices
+            # -- CHECK 3: ROOT DEVICE MUST BE ATTACHED --
+            root_device_attached = any(                                     # Check if root device is present in volumes
+                bdm.get('DeviceName') == root_device_name
+                for bdm in block_devices
             )
             if not root_device_name or not root_device_attached:
-                print(f"Skipping {instance_id} - No valid root device mapping.")
+                print(f"Skipping {instance_id} - No root volume attached.")
                 continue
 
-            # Get instance Name tag
-            name = ''
-            for tag in instance.get('Tags', []):
+            # -- GET INSTANCE NAME FROM TAGS --
+            name = ''                                                       # Default name if no tag found
+            for tag in instance.get('Tags', []):                            # Search for Name tag
                 if tag['Key'] == 'Name':
-                    name = tag['Value']
+                    name = tag['Value']                                     # Extract tag value
 
-            ami_name = f"Backup-{name or instance_id}-{date_str}"
-            print(f"Creating AMI for {instance_id} with name {ami_name}")
+            ami_name = f"Backup-{name or instance_id}-{date_str}"          # Construct AMI name
+            print(f"Creating AMI for {instance_id} as {ami_name}")
 
             try:
-                ec2.create_image(
+                ec2.create_image(                                           # Call AWS API to create AMI
                     InstanceId=instance_id,
                     Name=ami_name,
-                    NoReboot=True
+                    NoReboot=True                                          # Avoid rebooting the instance
                 )
             except Exception as e:
-                print(f"Error creating AMI for {instance_id}: {e}")
+                print(f"Error creating AMI for {instance_id}: {e}")         # Catch and log errors
                 continue
 
     ## -------- EBS SNAPSHOTS -------- ##
-    volumes = ec2.describe_volumes()
+    volumes = ec2.describe_volumes()                                       # Get all volumes in region
 
-    for volume in volumes['Volumes']:
-        volume_id = volume['VolumeId']
-        snapshot_description = f"Snapshot-{volume_id}-{date_str}"
+    for volume in volumes['Volumes']:                                      # Loop over each volume
+        volume_id = volume['VolumeId']                                     # Get Volume ID
+        snapshot_description = f"Snapshot-{volume_id}-{date_str}"         # Description for snapshot
         print(f"Creating snapshot for volume {volume_id}")
 
         try:
@@ -89,3 +91,4 @@ def lambda_handler(event, context):
         'statusCode': 200,
         'body': 'AMI and EBS backups completed with validations.'
     }
+
